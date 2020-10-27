@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
+#include <kernel.h>
 #include <drivers/entropy.h>
 #include <drivers/bluetooth/hci_driver.h>
 #include <bluetooth/controller.h>
@@ -22,6 +23,8 @@
 #include <sdc_soc.h>
 #include <sdc_hci.h>
 #include <sdc_hci_vs.h>
+#include <mpsl/mpsl_work.h>
+
 #include "multithreading_lock.h"
 #include "hci_internal.h"
 
@@ -184,6 +187,11 @@ void sdc_assertion_handler(const char *const file, const uint32_t line)
 }
 #endif /* IS_ENABLED(CONFIG_BT_CTLR_ASSERT_HANDLER) */
 
+static struct k_work receive_work;
+static inline void receive_signal_raise(void)
+{
+	mpsl_work_submit(&receive_work);
+}
 
 static int cmd_handle(struct net_buf *cmd)
 {
@@ -199,7 +207,7 @@ static int cmd_handle(struct net_buf *cmd)
 		return errcode;
 	}
 
-	k_sem_give(&sem_recv);
+	receive_signal_raise();
 
 	return 0;
 }
@@ -217,7 +225,7 @@ static int acl_handle(struct net_buf *acl)
 
 		if (errcode) {
 			/* Likely buffer overflow event */
-			k_sem_give(&sem_recv);
+			receive_signal_raise();
 		}
 	}
 
@@ -400,7 +408,7 @@ static bool fetch_and_process_acl_data(uint8_t *p_hci_buffer)
 	return true;
 }
 
-static void recv_thread(void *p1, void *p2, void *p3)
+void hci_driver_receive_process(void)
 {
 	ARG_UNUSED(p1);
 	ARG_UNUSED(p2);
@@ -415,30 +423,26 @@ static void recv_thread(void *p1, void *p2, void *p3)
 
 	bool received_evt = false;
 	bool received_data = false;
+	bool received_evt;
 
-	while (true) {
-		if (!received_evt && !received_data) {
-			/* Wait for a signal from the controller. */
-			k_sem_take(&sem_recv, K_FOREVER);
-		}
+	received_evt = fetch_and_process_hci_evt(&hci_buf[0]);
 
-		received_evt = fetch_and_process_hci_evt(&hci_buffer[0]);
+	if (IS_ENABLED(CONFIG_BT_CONN)) {
+		received_data = fetch_and_process_acl_data(&hci_buf[0]);
+	}
 
-		if (IS_ENABLED(CONFIG_BT_CONN)) {
-			received_data = fetch_and_process_acl_data(&hci_buffer[0]);
-		}
-
+	if (received_evt || received_data) {
 		/* Let other threads of same priority run in between. */
-		k_yield();
+		receive_signal_raise();
 	}
 }
 
-void host_signal(void)
+static void receive_work_handler(struct k_work *work)
 {
-	/* Wake up the RX event/data thread */
-	k_sem_give(&sem_recv);
-}
+	ARG_UNUSED(work);
 
+	hci_driver_receive_process();
+}
 
 static const struct device *entropy_source;
 
@@ -707,6 +711,10 @@ static int hci_driver_open(void)
 	LOG_HEXDUMP_INF(build_revision, sizeof(build_revision),
 			"SoftDevice Controller build revision: ");
 
+	if (IS_ENABLED(CONFIG_BT_CTLR_ECDH)) {
+		hci_ecdh_init();
+	}
+
 	int err;
 
 	err = configure_supported_features();
@@ -739,7 +747,7 @@ static int hci_driver_open(void)
 
 	err = MULTITHREADING_LOCK_ACQUIRE();
 	if (!err) {
-		err = sdc_enable(host_signal, sdc_mempool);
+		err = sdc_enable(hci_driver_receive_process, sdc_mempool);
 		MULTITHREADING_LOCK_RELEASE();
 	}
 	if (err < 0) {
