@@ -350,7 +350,7 @@ static void supported_commands(sdc_hci_ip_supported_commands_t *cmds)
 #endif
 #endif
 
-#if defined(CONFIG_BT_CTLR_SYNC_TRANSFER_SENDER)
+#if defined(CONFIG_BT_CTLR_SYNC_TRANSFER_SENDER) || defined(CONFIG_BT_CTLR_SYNC_TRANSFER_RECEIVER)
 	cmds->hci_le_periodic_advertising_sync_transfer = 1;
 #endif
 
@@ -477,6 +477,8 @@ static void le_supported_features(sdc_hci_le_le_features_t *features)
 #ifdef CONFIG_BT_CTLR_SYNC_TRANSFER_SENDER
 	features->periodic_advertising_sync_transfer_sender = 1;
 #endif
+#ifdef CONFIG_BT_CTLR_SYNC_TRANSFER_RECEIVER
+	features->periodic_advertising_sync_transfer_receiver = 1;
 #endif
 
 #if defined(CONFIG_BT_CTLR_DF_ADV_CTE_TX)
@@ -1032,6 +1034,19 @@ static uint8_t le_controller_cmd_put(uint8_t const * const cmd,
 		*param_length_out += sizeof(sdc_hci_cmd_le_periodic_adv_sync_transfer_return_t);
 		return sdc_hci_cmd_le_periodic_adv_sync_transfer((void *)cmd_params,
 								 (void *)event_out_params);
+#endif
+
+#if defined(CONFIG_BT_CTLR_SYNC_TRANSFER_RECEIVER)
+	case SDC_HCI_OPCODE_CMD_LE_SET_DEFAULT_PERIODIC_ADV_SYNC_TRANSFER_PARAMS:
+		return sdc_hci_cmd_le_set_default_periodic_adv_sync_transfer_params(
+			(void *)cmd_params);
+
+	case SDC_HCI_OPCODE_CMD_LE_SET_PERIODIC_ADV_SYNC_TRANSFER_PARAMS:
+		*param_length_out +=
+			sizeof(sdc_hci_cmd_le_set_periodic_adv_sync_transfer_params_return_t);
+		return sdc_hci_cmd_le_set_periodic_adv_sync_transfer_params(
+			(void *)cmd_params,
+			(void *)event_out_params);
 #endif
 
 	default:
